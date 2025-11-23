@@ -1,18 +1,16 @@
-#关于paddleocr的依赖
+# PaddleOCR MCP Server Dependencies
+# Install these in your conda environment (e.g., paddle-agent)
+
+# PaddleOCR MCP Package (Local installation from wheel)
+# Note: Adjust the URL if a newer version is available
 https://paddle-model-ecology.bj.bcebos.com/paddlex/PaddleX3.0/mcp/paddleocr_mcp/releases/v0.2.1/paddleocr_mcp-0.2.1-py3-none-any.whl
-"paddleocr-mcp[local] @ https://paddle-model-ecology.bj.bcebos.com/paddlex/PaddleX3.0/mcp/paddleocr_mcp/releases/v0.2.1/paddleocr_mcp-0.2.1-py3-none-any.whl"
-"paddleocr-mcp[local-cpu] @ https://paddle-model-ecology.bj.bcebos.com/paddlex/PaddleX3.0/mcp/paddleocr_mcp/releases/v0.2.1/paddleocr_mcp-0.2.1-py3-none-any.whl"
 
+# Standard dependencies
+requests>=2.28.0
+numpy>=1.21.0
+opencv-python>=4.6.0
+paddlepaddle>=2.6.0
+paddleocr>=2.7.0
 
-# Frontend Requirements (Web UI)
-
-# Environment:
-# Node.js >= 18.0.0
-# Package Manager: npm or yarn
-#
-# Core Dependencies (see frontend/package.json):
-# - react
-# - react-dom
-# - framer-motion (Animation)
-# - tailwindcss (Styling)
-# - vite (Build Tool)
+# MCP SDK (if needed for custom python servers)
+mcp>=0.1.0
