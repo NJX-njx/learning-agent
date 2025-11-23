@@ -15,7 +15,11 @@ const ChatPage: React.FC = () => {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isProfileOpen, setIsProfileOpen] = useState(false);
-  const [profile, setProfile] = useState<any>(null);
+  const [profile, setProfile] = useState<any>({
+    competencyLevel: '中等',
+    learningGoal: '',
+    preferredStyle: '讲解+计划'
+  });
   const [isLoading, setIsLoading] = useState(false);
   
   // Thinking Sidebar State
@@ -346,7 +350,7 @@ const ChatPage: React.FC = () => {
         onClose={() => setIsProfileOpen(false)} 
         onSubmit={handleProfileSubmit}
         initialData={profile}
-        mode={profile ? 'modal' : 'wizard'}
+        mode="modal"
       />
     </div>
   );
