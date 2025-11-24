@@ -1,9 +1,16 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { Send, Paperclip, Image as ImageIcon, Settings, Plus, MessageSquare, User, BrainCircuit, ChevronRight, UploadCloud, FileText, Mic, Copy, Edit2, ArrowUp, AudioLines, ThumbsUp, ThumbsDown, Share, RotateCw, MoreHorizontal, Volume2, Flag, GitBranch } from 'lucide-react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { Send, Paperclip, Image as ImageIcon, Settings, Plus, MessageSquare, User, BrainCircuit, ChevronRight, UploadCloud, FileText, Mic, Copy, Edit2, ArrowUp, AudioLines, ThumbsUp, ThumbsDown, Share, RotateCw, MoreHorizontal, Volume2, Flag, GitBranch, X, PanelLeft } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import ProfileModal from '../components/ProfileModal';
 import ThinkingSidebar from '../components/ThinkingSidebar';
+
+declare global {
+  interface Window {
+    SpeechRecognition: any;
+    webkitSpeechRecognition: any;
+  }
+}
 
 interface Message {
   id: string;
@@ -11,6 +18,13 @@ interface Message {
   content: string;
   attachments?: string[];
   thinkingSteps?: any[];
+}
+
+interface ChatSession {
+  id: string;
+  title: string;
+  date: string;
+  messages: Message[];
 }
 
 const ChatPage: React.FC = () => {
@@ -27,12 +41,125 @@ const ChatPage: React.FC = () => {
     };
   });
   const [isLoading, setIsLoading] = useState(false);
+
+  // Chat Sessions State
+  const [sessions, setSessions] = useState<ChatSession[]>([
+    {
+      id: 'mock-1',
+      title: '一次函数错题分析',
+      date: '今天',
+      messages: [
+        { id: 'm1', role: 'user', content: '帮我看看这道一次函数的题。' },
+        { id: 'm2', role: 'assistant', content: '没问题，请上传题目图片，我会为你分析知识点和解题思路。' }
+      ]
+    }
+  ]);
+  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
+  
+  // Sidebar State
+  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [sidebarWidth, setSidebarWidth] = useState(260);
+  const [isResizing, setIsResizing] = useState(false);
+  const sidebarRef = useRef<HTMLDivElement>(null);
+
+  // Resize handlers
+  const startResizing = useCallback(() => {
+    setIsResizing(true);
+  }, []);
+
+  const stopResizing = useCallback(() => {
+    setIsResizing(false);
+  }, []);
+
+  const resize = useCallback((mouseMoveEvent: MouseEvent) => {
+    if (isResizing) {
+      const newWidth = mouseMoveEvent.clientX;
+      if (newWidth > 200 && newWidth < 480) { // Min and max width constraints
+        setSidebarWidth(newWidth);
+      }
+    }
+  }, [isResizing]);
+
+  useEffect(() => {
+    window.addEventListener("mousemove", resize);
+    window.addEventListener("mouseup", stopResizing);
+    return () => {
+      window.removeEventListener("mousemove", resize);
+      window.removeEventListener("mouseup", stopResizing);
+    };
+  }, [resize, stopResizing]);
   
   // Thinking Sidebar State
   const [isThinkingOpen, setIsThinkingOpen] = useState(false);
   const [activeThinkingSteps, setActiveThinkingSteps] = useState<any[]>([]);
+  const [selectedImage, setSelectedImage] = useState<string | null>(null);
+  
+  // Voice Input State
+  const [isRecording, setIsRecording] = useState(false);
+  const recognitionRef = useRef<any>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const toggleRecording = () => {
+    if (isRecording) {
+      if (recognitionRef.current) {
+        recognitionRef.current.stop();
+      }
+      setIsRecording(false);
+      return;
+    }
+
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      alert("您的浏览器不支持语音输入，请使用 Chrome 或 Edge。");
+      return;
+    }
+
+    const recognition = new SpeechRecognition();
+    recognition.lang = 'zh-CN';
+    recognition.continuous = false;
+    recognition.interimResults = false;
+
+    recognition.onstart = () => {
+      setIsRecording(true);
+    };
+
+    recognition.onend = () => {
+      setIsRecording(false);
+    };
+
+    recognition.onresult = (event: any) => {
+      const transcript = event.results[0][0].transcript;
+      setInput(prev => prev + transcript);
+    };
+    
+    recognition.onerror = (event: any) => {
+      console.error("Speech recognition error", event.error);
+      setIsRecording(false);
+    };
+
+    recognitionRef.current = recognition;
+    recognition.start();
+  };
+
+  const handleNewChat = () => {
+    setMessages([]);
+    setInput('');
+    setSelectedImage(null);
+    setCurrentSessionId(null);
+    setIsThinkingOpen(false);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const loadSession = (session: ChatSession) => {
+    setMessages(session.messages);
+    setCurrentSessionId(session.id);
+    setIsThinkingOpen(false);
+    // On mobile, close sidebar after selection
+    if (window.innerWidth < 768) {
+      setIsSidebarOpen(false);
+    }
+  };
 
   const handleProfileSubmit = async (data: any) => {
     setProfile(data);
@@ -51,7 +178,7 @@ const ChatPage: React.FC = () => {
   };
 
   const handleSend = async () => {
-    if (!input.trim() && !fileInputRef.current?.files?.length) return;
+    if (!input.trim() && !selectedImage) return;
 
     const newMessage: Message = {
       id: Date.now().toString(),
@@ -59,18 +186,43 @@ const ChatPage: React.FC = () => {
       content: input,
     };
 
-    const file = fileInputRef.current?.files?.[0];
-    if (file) {
-      newMessage.attachments = [URL.createObjectURL(file)];
+    if (selectedImage) {
+      newMessage.attachments = [selectedImage];
     }
 
-    setMessages(prev => [...prev, newMessage]);
+    // Update Messages State
+    const updatedMessages = [...messages, newMessage];
+    setMessages(updatedMessages);
+    
+    // Update Sessions State
+    let activeSessionId = currentSessionId;
+    if (!activeSessionId) {
+      activeSessionId = Date.now().toString();
+      setCurrentSessionId(activeSessionId);
+      const newSession: ChatSession = {
+        id: activeSessionId,
+        title: input.slice(0, 20) || '新对话',
+        date: '今天',
+        messages: updatedMessages
+      };
+      setSessions(prev => [newSession, ...prev]);
+    } else {
+      setSessions(prev => prev.map(session => 
+        session.id === activeSessionId 
+          ? { ...session, messages: updatedMessages }
+          : session
+      ));
+    }
+
     setInput('');
+    setSelectedImage(null);
     setIsLoading(true);
 
     try {
       const formData = new FormData();
-      if (file) formData.append('image', file);
+      if (fileInputRef.current?.files?.[0]) {
+        formData.append('image', fileInputRef.current.files[0]);
+      }
       formData.append('profile', JSON.stringify(profile));
       
       const user = JSON.parse(localStorage.getItem('user') || '{}');
@@ -99,7 +251,16 @@ const ChatPage: React.FC = () => {
           content: responseContent,
           thinkingSteps: data.data.steps
         };
-        setMessages(prev => [...prev, assistantMessage]);
+        
+        setMessages(prev => {
+            const newMessages = [...prev, assistantMessage];
+            setSessions(prevSessions => prevSessions.map(session => 
+                session.id === activeSessionId 
+                  ? { ...session, messages: newMessages }
+                  : session
+            ));
+            return newMessages;
+        });
       }
     } catch (error) {
       console.error("Error:", error);
@@ -109,16 +270,44 @@ const ChatPage: React.FC = () => {
               { title: "分析知识点", status: "completed", duration: "3s", details: "关联知识点：一次函数性质、图像变换。" },
               { title: "生成复盘建议", status: "completed", duration: "2s", details: "建议加强对斜率 k 和截距 b 的理解。" }
           ];
-          setMessages(prev => [...prev, {
+          
+          const assistantMessage: Message = {
             id: (Date.now() + 1).toString(),
             role: 'assistant',
             content: "（演示模式）分析完成！这是基于你的错题生成的分析报告。",
             thinkingSteps: mockSteps
-          }]);
+          };
+
+          setMessages(prev => {
+            const newMessages = [...prev, assistantMessage];
+            setSessions(prevSessions => prevSessions.map(session => 
+                session.id === activeSessionId 
+                  ? { ...session, messages: newMessages }
+                  : session
+            ));
+            return newMessages;
+          });
           setIsLoading(false);
       }, 2000);
     } finally {
       if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      const file = e.target.files[0];
+      const imageUrl = URL.createObjectURL(file);
+      setSelectedImage(imageUrl);
+      // Optional: Set default text if empty
+      // setInput(prev => prev || "我上传了一张图片，请帮我分析。");
+    }
+  };
+
+  const clearImage = () => {
+    setSelectedImage(null);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
     }
   };
 
@@ -138,51 +327,101 @@ const ChatPage: React.FC = () => {
       />
 
       {/* Sidebar (Desktop) */}
-      <div className="w-[260px] bg-black text-gray-100 flex flex-col hidden md:flex flex-shrink-0">
-        <div className="p-3">
-          <button 
-            onClick={() => { setMessages([]); setInput(''); }}
-            className="w-full flex items-center gap-2 px-3 py-3 bg-gray-900 hover:bg-gray-800 border border-gray-700 rounded-lg transition-colors text-sm font-medium text-white shadow-sm"
-          >
-            <Plus size={16} />
-            新对话
-          </button>
-        </div>
-        
-        <div className="flex-1 overflow-y-auto px-2 py-2">
-          <div className="px-2 py-2 text-xs font-medium text-gray-500">今天</div>
-          <button className="w-full text-left px-3 py-2 rounded-lg hover:bg-gray-900 text-sm text-gray-300 truncate transition-colors">
-            一次函数错题分析
-          </button>
-        </div>
+      {isSidebarOpen && (
+        <div 
+          ref={sidebarRef}
+          className="bg-gray-50 border-r border-gray-200 text-gray-900 flex flex-col hidden md:flex flex-shrink-0 relative group"
+          style={{ width: sidebarWidth }}
+        >
+          <div className="p-4 flex items-center justify-between font-semibold text-gray-700">
+             <div className="flex items-center gap-2">
+               <BrainCircuit size={20} />
+               <span>SophieSync</span>
+             </div>
+             <button 
+               onClick={() => setIsSidebarOpen(false)}
+               className="p-1.5 text-gray-500 hover:bg-gray-200 rounded-md transition-colors"
+               title="收起侧边栏"
+             >
+               <PanelLeft size={20} />
+             </button>
+          </div>
 
-        <div className="p-3 border-t border-gray-800">
-          <button 
-            onClick={() => setIsProfileOpen(true)}
-            className="flex items-center gap-3 w-full px-2 py-3 hover:bg-gray-900 rounded-lg transition-colors"
-          >
-            <div className="w-8 h-8 bg-violet-600 rounded-full flex items-center justify-center text-white font-medium text-sm">
-              S
-            </div>
-            <div className="text-sm font-medium text-gray-200">Sophie</div>
-            <Settings size={16} className="ml-auto text-gray-500" />
-          </button>
+          <div className="px-3 pb-2">
+            <button 
+              onClick={handleNewChat}
+              className="w-full flex items-center gap-2 px-3 py-2 hover:bg-gray-200 rounded-lg transition-colors text-sm font-medium text-gray-700"
+            >
+              <Edit2 size={16} />
+              新对话
+            </button>
+          </div>
+          
+          <div className="flex-1 overflow-y-auto px-2 py-2">
+            <div className="px-2 py-2 text-xs font-medium text-gray-500">今天</div>
+            {sessions.map(session => (
+              <button 
+                key={session.id}
+                onClick={() => loadSession(session)}
+                className={`w-full text-left px-3 py-2 rounded-lg text-sm truncate transition-colors ${
+                  currentSessionId === session.id 
+                    ? 'bg-gray-200 text-gray-900 font-medium' 
+                    : 'hover:bg-gray-200 text-gray-700'
+                }`}
+              >
+                {session.title}
+              </button>
+            ))}
+          </div>
+
+          <div className="p-3 border-t border-gray-200">
+            <button 
+              onClick={() => setIsProfileOpen(true)}
+              className="flex items-center gap-3 w-full px-2 py-3 hover:bg-gray-200 rounded-lg transition-colors"
+            >
+              <div className="w-8 h-8 bg-violet-100 text-violet-600 rounded-full flex items-center justify-center font-medium text-sm">
+                S
+              </div>
+              <div className="text-sm font-medium text-gray-700">Sophie</div>
+              <Settings size={16} className="ml-auto text-gray-400" />
+            </button>
+          </div>
+
+          {/* Resizer Handle */}
+          <div
+            className="absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-violet-400 transition-colors z-50"
+            onMouseDown={startResizing}
+          />
         </div>
-      </div>
+      )}
 
       {/* Main Content */}
       <div className={`flex-1 flex flex-col relative bg-white h-full transition-all duration-300 ease-in-out ${isThinkingOpen ? 'md:mr-[400px]' : ''}`}>
-        {/* Mobile Header */}
-        <div className="md:hidden h-14 border-b border-gray-200 flex items-center justify-between px-4 bg-white z-10 flex-shrink-0">
-          <span className="font-bold text-gray-800">SophieSync</span>
-          <button onClick={() => setIsProfileOpen(true)}><Settings size={20} className="text-gray-600" /></button>
+        {/* Mobile Header & Desktop Toggle */}
+        <div className="h-14 border-b border-gray-200 flex items-center justify-between px-4 bg-white z-10 flex-shrink-0 md:border-none md:h-auto md:absolute md:top-4 md:left-4 md:w-auto md:bg-transparent">
+          {/* Mobile Logo */}
+          <span className="font-bold text-gray-800 md:hidden">SophieSync</span>
+          
+          {/* Desktop Toggle Button (Only visible when sidebar is closed) */}
+          {!isSidebarOpen && (
+            <button 
+              onClick={() => setIsSidebarOpen(true)}
+              className="hidden md:flex p-2 text-gray-500 hover:bg-gray-100 rounded-lg transition-colors border border-gray-200 bg-white shadow-sm"
+              title="展开侧边栏"
+            >
+              <PanelLeft size={20} />
+            </button>
+          )}
+
+          {/* Mobile Settings */}
+          <button onClick={() => setIsProfileOpen(true)} className="md:hidden"><Settings size={20} className="text-gray-600" /></button>
         </div>
 
         {messages.length === 0 ? (
           /* Empty State / Landing View */
           <div className="flex-1 flex flex-col items-center justify-center p-4 md:p-8 overflow-y-auto">
-            <div className="w-full max-w-3xl flex flex-col items-center space-y-8 -mt-20">
-              <h1 className="text-3xl md:text-4xl font-semibold text-gray-900">今天想学什么？</h1>
+            <div className="w-full max-w-3xl flex flex-col space-y-8 -mt-20">
+              <h1 className="text-3xl md:text-4xl font-semibold text-gray-900 text-justify" style={{ textAlignLast: 'justify' }}>What would you like to learn today?</h1>
               
               {/* Action Cards */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4 w-full">
@@ -195,7 +434,7 @@ const ChatPage: React.FC = () => {
                     <span className="text-[10px] bg-green-100 text-green-700 px-2 py-0.5 rounded-full font-medium">热门</span>
                   </div>
                   <div className="font-medium text-gray-900 mb-1">上传</div>
-                  <div className="text-xs text-gray-500">文件、音频、视频</div>
+                  <div className="text-xs text-gray-500">图片</div>
                 </button>
 
                 <button className="p-4 border border-gray-200 rounded-xl text-left hover:bg-gray-50 transition-all hover:shadow-sm group bg-white">
@@ -217,40 +456,66 @@ const ChatPage: React.FC = () => {
 
               {/* Input Area (Centered) */}
               <div className="w-full max-w-3xl relative">
-                <div className="relative flex items-center gap-2 bg-[#f4f4f4] rounded-[26px] px-4 py-2 focus-within:ring-1 focus-within:ring-black/5 transition-all">
+                <div className="relative flex items-end gap-2 bg-[#f4f4f4] rounded-[26px] px-4 py-2 focus-within:ring-1 focus-within:ring-black/5 transition-all">
                   <button 
                     onClick={() => fileInputRef.current?.click()}
-                    className="p-2 text-gray-900 hover:bg-gray-200 rounded-full transition-colors flex-shrink-0"
+                    className="p-2 text-gray-900 hover:bg-gray-200 rounded-full transition-colors flex-shrink-0 mb-1"
                   >
                     <Plus size={24} strokeWidth={2} />
                   </button>
                   
-                  <textarea
-                    value={input}
-                    onChange={(e) => setInput(e.target.value)}
-                    onKeyDown={handleKeyDown}
-                    placeholder="询问任何问题"
-                    className="w-full max-h-[200px] py-3 px-2 bg-transparent border-none focus:ring-0 resize-none text-gray-900 placeholder-gray-500 text-lg"
-                    rows={1}
-                    style={{ minHeight: '52px' }}
-                  />
+                  <div className="flex-1 flex flex-col min-w-0">
+                    {selectedImage && (
+                      <div className="pt-2 pb-1">
+                        <div className="relative inline-block group">
+                          <img 
+                            src={selectedImage} 
+                            alt="preview" 
+                            className="h-16 w-16 object-cover rounded-lg border border-gray-200 shadow-sm" 
+                          />
+                          <button 
+                            onClick={clearImage}
+                            className="absolute -top-1.5 -right-1.5 bg-gray-500 text-white rounded-full p-0.5 hover:bg-gray-700 opacity-0 group-hover:opacity-100 transition-opacity shadow-sm"
+                          >
+                            <X size={12} />
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                    <textarea
+                      value={input}
+                      onChange={(e) => setInput(e.target.value)}
+                      onKeyDown={handleKeyDown}
+                      placeholder="询问任何问题"
+                      className="w-full max-h-[200px] py-3 px-2 bg-transparent border-none focus:ring-0 outline-none resize-none text-gray-900 placeholder-gray-500 text-lg"
+                      rows={1}
+                      style={{ minHeight: '52px' }}
+                    />
+                  </div>
                   
-                  <div className="flex items-center gap-2 pr-1">
-                    {!input.trim() && (
-                      <button className="text-gray-900 hover:bg-gray-200 p-2 rounded-full transition-colors">
+                  <div className="flex items-center gap-2 pr-1 mb-1">
+                    {!input.trim() && !selectedImage && (
+                      <button 
+                        onClick={toggleRecording}
+                        className={`p-2 rounded-full transition-colors ${
+                          isRecording 
+                            ? 'bg-red-100 text-red-600 animate-pulse' 
+                            : 'text-gray-900 hover:bg-gray-200'
+                        }`}
+                      >
                         <Mic size={24} />
                       </button>
                     )}
                     <button 
                       onClick={handleSend}
-                      disabled={!input.trim() && !fileInputRef.current?.files?.length}
+                      disabled={!input.trim() && !selectedImage}
                       className={`w-10 h-10 rounded-full flex items-center justify-center transition-all flex-shrink-0 ${
-                        input.trim() || fileInputRef.current?.files?.length
+                        input.trim() || selectedImage
                           ? 'bg-black text-white hover:bg-gray-800' 
                           : 'bg-black text-white'
                       }`}
                     >
-                      {input.trim() ? <ArrowUp size={20} /> : <AudioLines size={20} />}
+                      {input.trim() || selectedImage ? <ArrowUp size={20} /> : <AudioLines size={20} />}
                     </button>
                   </div>
                 </div>
@@ -382,29 +647,48 @@ const ChatPage: React.FC = () => {
             {/* Input Area (Bottom) */}
             <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-white via-white to-transparent pt-10 pb-6 px-4 md:px-0">
               <div className="max-w-3xl mx-auto relative">
-                <div className="relative flex items-center gap-2 bg-[#f4f4f4] rounded-[26px] px-4 py-2 focus-within:ring-1 focus-within:ring-black/5 transition-all">
+                <div className="relative flex items-end gap-2 bg-[#f4f4f4] rounded-[26px] px-4 py-2 focus-within:ring-1 focus-within:ring-black/5 transition-all">
                   <button 
                     onClick={() => fileInputRef.current?.click()}
-                    className="p-2 text-gray-900 hover:bg-gray-200 rounded-full transition-colors flex-shrink-0"
+                    className="p-2 text-gray-900 hover:bg-gray-200 rounded-full transition-colors flex-shrink-0 mb-1"
                   >
                     <Plus size={24} strokeWidth={2} />
                   </button>
                   
-                  <textarea
-                    value={input}
-                    onChange={(e) => setInput(e.target.value)}
-                    onKeyDown={handleKeyDown}
-                    placeholder="发送消息..."
-                    className="w-full max-h-[200px] py-3 px-2 bg-transparent border-none focus:ring-0 resize-none text-gray-900 placeholder-gray-400"
-                    rows={1}
-                    style={{ minHeight: '52px' }}
-                  />
+                  <div className="flex-1 flex flex-col min-w-0">
+                    {selectedImage && (
+                      <div className="pt-2 pb-1">
+                        <div className="relative inline-block group">
+                          <img 
+                            src={selectedImage} 
+                            alt="preview" 
+                            className="h-16 w-16 object-cover rounded-lg border border-gray-200 shadow-sm" 
+                          />
+                          <button 
+                            onClick={clearImage}
+                            className="absolute -top-1.5 -right-1.5 bg-gray-500 text-white rounded-full p-0.5 hover:bg-gray-700 opacity-0 group-hover:opacity-100 transition-opacity shadow-sm"
+                          >
+                            <X size={12} />
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                    <textarea
+                      value={input}
+                      onChange={(e) => setInput(e.target.value)}
+                      onKeyDown={handleKeyDown}
+                      placeholder="发送消息..."
+                      className="w-full max-h-[200px] py-3 px-2 bg-transparent border-none focus:ring-0 outline-none resize-none text-gray-900 placeholder-gray-400"
+                      rows={1}
+                      style={{ minHeight: '52px' }}
+                    />
+                  </div>
                   
                   <button 
                     onClick={handleSend}
-                    disabled={!input.trim() && !fileInputRef.current?.files?.length}
+                    disabled={!input.trim() && !selectedImage}
                     className={`p-2 rounded-xl transition-all flex-shrink-0 self-end mb-1 ${
-                      input.trim() || fileInputRef.current?.files?.length
+                      input.trim() || selectedImage
                         ? 'bg-black text-white hover:bg-gray-800' 
                         : 'bg-gray-100 text-gray-300 cursor-not-allowed'
                     }`}
@@ -425,11 +709,7 @@ const ChatPage: React.FC = () => {
           ref={fileInputRef} 
           className="hidden" 
           accept="image/*"
-          onChange={(e) => {
-            if (e.target.files?.length) {
-               setInput(prev => prev || "我上传了一张图片，请帮我分析。");
-            }
-          }}
+          onChange={handleFileSelect}
         />
       </div>
 
