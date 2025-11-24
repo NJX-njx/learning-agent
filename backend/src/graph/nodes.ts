@@ -47,7 +47,7 @@ const PLANNING_SYSTEM_PROMPT = [
   "",
   "## 输出格式规范",
   "请严格按照以下格式输出 JSON 数组，每个任务为一个对象：",
-  "  {",
+  "  {{",
   "    \"taskId\": \"T1\", // 任务ID，从T1开始递增",
   "    \"type\": \"execution\", // 任务类型，只能是 annotation/analysis/organization/planning/execution 之一",
   "    \"description\": \"详细描述，包含明确步骤和工具调用指令\",",
@@ -56,11 +56,12 @@ const PLANNING_SYSTEM_PROMPT = [
   "    \"estimatedDuration\": \"30min\", // 预估耗时，可选",
   "    \"inputData\": [\"OCR文本段落1\", \"学习者画像\"], // 任务所需输入，可选",
   "    \"outputFormat\": \"Notion页面，包含标题、知识点列表、例题\" // 预期输出形式，可选",
-  "  }",
+  "  }}",
   "",
   "## 关键规则与注意事项",
   "1. **信息来源灵活性**：你可根据实际接收到的信息（用户请求、OCR、画像）动态调整任务内容，不强制要求三要素齐全。",
   "2. **任务拆分原则**：当用户请求涉及多个动作或目标时，必须拆分为独立子任务，确保每个任务描述单一且完整。",
+  "   - **重要**：如果用户请求非常简单（如“创建一个页面”），请生成**单个** execution 类型的任务，不要拆分为 analysis + execution，除非任务非常复杂。",
   "3. **工具调用明确性**：所有 execution 类型任务的描述中，必须包含具体的工具调用指令（如“调用notion_create_page”、“调用notion_append_content”）。",
   "4. **描述详尽性**：避免模糊表述，每个任务描述应能让其他智能体无需额外上下文即可执行。",
   "5. **输出纯净性**：只输出 JSON 数组，不要添加 Markdown 代码块标记或其他解释性文字。"
@@ -87,14 +88,18 @@ const SYSTEM_PROMPT = [
   "   引用格式示例：`(来源：OCR行3-5)` 或 `(来源：Notion页面《xxx》)`，确保读者可溯源。",
   "3. **主动搜索**：在创建新页面前，建议先调用 `notion_search` 确认是否已存在相关页面，避免重复。",
   "   搜索关键词策略：优先用任务标题中的核心名词 + 学习者 ID；如无结果，再使用学习者 ID 范围搜索。",
+  "4. **内容纯净性**：在生成 Notion 页面内容时，**严禁**包含任务本身的元数据（如 Priority, Type, Due Date 等）。只输出教育性的内容（标题、知识点、解析等）。",
+  "   - 错误示例：`Priority: 5 ...`",
+  "   - 正确示例：`# 标题 ...`",
   "",
   "### 3. 工具使用指南",
   "- **创建新笔记**：使用 `notion_create_page`。需要 `parentPageId`（可先搜索 'sophie' 或使用当前会话页面的 ID）。",
-  "  参数模板：`{ parentPageId: string, title: string, content: string, icon?: string, cover?: string }`",
+  "  参数模板：`{{ parentPageId: string, title: string, content: string, icon?: string, cover?: string }}`",
   "  示例：若任务要求创建《一次函数笔记》，先 `notion_search('一次函数')` → 无结果 → 用默认 parentPageId → 调用 `notion_create_page` 传入标题与内容。",
+  "  **内容处理**：在传入 `content` 参数前，必须对 OCR 文本进行**重写和结构化**。不要直接复制粘贴。使用 Markdown 格式，增加标题、列表、粗体等，使其像一份专业的学习笔记。",
   "- **追加内容**：使用 `notion_append_content`。需要 `pageId`。",
-  "  参数模板：`{ pageId: string, content: string, position?: 'append' | 'prepend' }`",
-  "  追加内容时自动在段首加入时间戳：`> 更新时间：{ISO时间}`，方便版本追踪。",
+  "  参数模板：`{{ pageId: string, content: string, position?: 'append' | 'prepend' }}`",
+  "  追加内容时自动在段首加入时间戳：`> 更新时间：{{ISO时间}}`，方便版本追踪。",
   "- **查询信息**：使用 `notion_search` 或 `notion_query_database`。",
   "  搜索最佳实践：先用精确标题搜索，无结果再用关键词+学习者ID，仍无结果则扩大至父级目录。",
   "",
@@ -108,13 +113,24 @@ const SYSTEM_PROMPT = [
   "4. 调用写入/修改工具。",
   "   调用后立即检查返回字符串是否包含 `ID:` 与 `URL:`，缺少任意一项即视为失败并重试一次。",
   "5. 确认工具执行成功后，向用户汇报结果（包含新页面的链接）。",
-  "   汇报格式：`✅ T{n} 完成 → {页面标题} {URL}`，保持一行内结束。",
+  "   汇报格式：`✅ T{{n}} 完成 → {{页面标题}} {{URL}}`，保持一行内结束。",
   "",
   "### 5. 输出规范",
   "- 如果调用了工具，请在工具执行完毕后，简要总结操作结果。",
-  "  汇报模板：`✅ T{n} 完成 → {页面标题} {URL}`，必须一行内 ≤ 140 字符。",
+  "  汇报模板：`✅ T{{n}} 完成 → {{页面标题}} {{URL}}`，必须一行内 ≤ 140 字符。",
   "- 如果未调用工具，请直接输出分析结果。",
   "  输出格式：先一句话结论，后附引用，如：\n  > 结论：该题为一次函数应用题，需先求斜率。\n  > 来源：OCR 行 8-10。",
+  "- **重要**：如果你无法直接调用工具，请输出以下 JSON 格式，系统将自动帮你执行：",
+  "  ```json",
+  "  {",
+  "    \"tool_name\": \"notion_create_page\",",
+  "    \"arguments\": {",
+  "       \"parentPageId\": \"...\",",
+  "       \"title\": \"...\",",
+  "       \"content\": \"...\"",
+  "    }",
+  "  }",
+  "  ```",
   ""
 ].join("\n");
 
@@ -293,8 +309,44 @@ export const createNodes = (
       console.log(`  Step ${step + 1}/${MAX_STEPS}...`);
       const response = await modelWithTools.invoke(messages);
       
-      console.log("  Model Response Content:", typeof response.content === 'string' ? response.content : JSON.stringify(response.content));
+      let content = typeof response.content === 'string' ? response.content : JSON.stringify(response.content);
+      console.log("  Model Response Content:", content);
       console.log("  Model Tool Calls:", JSON.stringify(response.tool_calls));
+
+      // --- NEW LOGIC: JSON Fallback Parser ---
+      if ((!response.tool_calls || response.tool_calls.length === 0) && content.trim().startsWith('{')) {
+        try {
+           // Try to extract JSON from the content (handle potential markdown wrappers)
+           const jsonMatch = content.match(/\{[\s\S]*\}/);
+           if (jsonMatch) {
+             const jsonStr = jsonMatch[0];
+             const parsed = JSON.parse(jsonStr);
+             
+             // Check if it looks like a tool call wrapper
+             if (parsed.tool_name && parsed.arguments) {
+                console.log("  [JSON Fallback] Detected tool call in JSON content:", parsed.tool_name);
+                // Manually inject into tool_calls
+                response.tool_calls = [{
+                    name: parsed.tool_name,
+                    args: parsed.arguments,
+                    id: `call_${Date.now()}` // Generate a dummy ID
+                }];
+             } 
+             // Check if it looks like direct arguments for notion_create_page (common failure mode)
+             else if (parsed.title && parsed.content && (parsed.parentPageId || parsed.pageId)) {
+                 console.log("  [JSON Fallback] Detected implicit notion_create_page arguments");
+                 response.tool_calls = [{
+                    name: "notion_create_page",
+                    args: parsed,
+                    id: `call_${Date.now()}`
+                 }];
+             }
+           }
+        } catch (e) {
+           console.log("  [JSON Fallback] Failed to parse JSON content:", e);
+        }
+      }
+      // ---------------------------------------
 
       messages.push(response);
 
@@ -341,14 +393,24 @@ export const createNodes = (
           }));
         }
       } else {
+        // Check for completion report
+        const isCompletionReport = content.trim().startsWith("✅") || content.includes("Task execution completed") || content.includes("任务完成");
+        if (isCompletionReport) {
+            console.log("  [Completion Detected] Model reported completion. Stopping.");
+            finalContent = content;
+            break;
+        }
+
         // Check if model promised to call a tool but didn't (Hallucination Check)
-        const content = typeof response.content === 'string' ? response.content : JSON.stringify(response.content);
+        const contentStr = typeof response.content === 'string' ? response.content : JSON.stringify(response.content);
         
         // Heuristic: If task implies action, and content claims action, but no tool was called.
         const isActionTask = (task.type as string) === 'execution' || task.type === 'organization';
-        const claimsAction = content.includes("已创建") || content.includes("已写入") || content.includes("调用工具") || content.includes("notion_create_page");
+        const claimsAction = contentStr.includes("已创建") || contentStr.includes("已写入") || contentStr.includes("调用工具") || contentStr.includes("notion_create_page");
         
-        if (isActionTask && claimsAction) {
+        // Only trigger anti-hallucination if we haven't created any pages yet in this session
+        // If we HAVE created pages, the model might be referring to those past actions.
+        if (isActionTask && claimsAction && newCreatedPages.length === 0) {
              console.warn("  [Anti-Hallucination] Model claimed action but didn't call tool. Retrying with strict reminder...");
              messages.push(new HumanMessage("SYSTEM ERROR: No tool call detected. \n\nYou just said you took action, but you didn't invoke the function. \n\nSTOP explaining. \n\nINVOKE the function 'notion_create_page' (or 'notion_append_content') with the JSON arguments immediately."));
              step++;
@@ -356,7 +418,7 @@ export const createNodes = (
         }
 
         // No more tool calls, task is done
-        finalContent = content;
+        finalContent = contentStr;
         console.log("  Task execution completed.");
         break;
       }
@@ -366,6 +428,12 @@ export const createNodes = (
     if (step >= MAX_STEPS) {
       console.warn("  Task execution reached max steps, stopping.");
       finalContent = "Task execution stopped due to maximum step limit.";
+    }
+    
+    // Override content if pages were created to ensure clean output
+    if (newCreatedPages.length > 0) {
+        const links = newCreatedPages.map(p => `[${p.url ? '点击查看页面' : '页面ID: ' + p.id}](${p.url || '#'})`).join('  ');
+        finalContent = `✅ **任务 T${task.taskId.replace('T','')} 完成**\n\n已创建 Notion 页面：\n${links}`;
     }
     
     // Append to generatedContents

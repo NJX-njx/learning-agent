@@ -39,11 +39,11 @@ const feedbackManager = new FeedbackLoopManager();
 // Helper to find parent page
 async function findParentPage(notionClient: NotionMcpClient): Promise<string> {
   try {
-    const dashboardId = await notionClient.searchPage("Learning Dashboard");
-    if (dashboardId) return dashboardId;
+    const dashboardPage = await notionClient.searchPage("Learning Dashboard");
+    if (dashboardPage) return dashboardPage.id;
     
-    const anyPageId = await notionClient.searchPage("");
-    if (anyPageId) return anyPageId;
+    const anyPage = await notionClient.searchPage("");
+    if (anyPage) return anyPage.id;
     
     throw new Error("No Notion pages found");
   } catch (error) {
@@ -54,14 +54,17 @@ async function findParentPage(notionClient: NotionMcpClient): Promise<string> {
 
 app.post('/api/analyze', upload.single('image'), async (req: Request, res: Response) => {
   try {
-    if (!req.file) {
-      return res.status(400).json({ error: 'No image file provided' });
+    if (!req.file && !req.body.message) {
+      return res.status(400).json({ error: 'No image file or message provided' });
     }
 
     const profileData = JSON.parse(req.body.profile || '{}');
-    const imagePath = path.resolve(req.file.path);
+    const imagePath = req.file ? path.resolve(req.file.path) : "";
+    const userQuery = req.body.message || "";
 
-    console.log("Processing image:", imagePath);
+    console.log("Processing request");
+    if (imagePath) console.log("Image:", imagePath);
+    console.log("User Query:", userQuery);
     console.log("Learner Profile:", profileData);
 
     // 1. Find Parent Page (Learner ID)
@@ -75,13 +78,8 @@ app.post('/api/analyze', upload.single('image'), async (req: Request, res: Respo
       preferredStyle: profileData.preferredStyle || "讲解+计划"
     };
 
-    // 2. Define Tasks
-    const tasks: Array<LearningTask> = [
-      { taskId: "T1", type: "annotation", description: "补充批注与错因分析", priority: 5 },
-      { taskId: "T2", type: "analysis", description: "生成分步解析与知识点", priority: 4 },
-      { taskId: "T3", type: "organization", description: "整理成 Markdown 笔记", priority: 3 },
-      { taskId: "T4", type: "planning", description: "制定 3 日复盘计划", priority: 4, dueDate: new Date(Date.now() + 3 * 86400000).toISOString() }
-    ];
+    // 2. Define Tasks (Empty initially, let the Planning Node generate them)
+    const tasks: Array<LearningTask> = [];
 
     // 3. Initialize Workflow
     const appWorkflow = createWorkflow(ocrClient, notionClient);
@@ -90,6 +88,7 @@ app.post('/api/analyze', upload.single('image'), async (req: Request, res: Respo
       imagePath: imagePath,
       learnerProfile,
       tasks,
+      userQuery,
       currentTaskIndex: 0,
       generatedContents: [],
       createdPageIds: []
@@ -102,16 +101,29 @@ app.post('/api/analyze', upload.single('image'), async (req: Request, res: Respo
     const finalState: any = await appWorkflow.invoke(initialState);
 
     // 5. Cleanup
-    // fs.unlinkSync(imagePath); // Optional: delete file after processing
+    if (req.file) {
+        // fs.unlinkSync(imagePath); // Optional: delete file after processing
+    }
 
     // 6. Construct Response
-    // We'll return the generated content and a simulated "trace" of the steps
-    const steps = [
-      { title: "OCR Recognition", status: "completed", duration: "2s", details: "Identified text and equations from image." },
-      { title: "Error Analysis", status: "completed", duration: "5s", details: "Analyzed mistakes and identified root causes." },
-      { title: "Content Generation", status: "completed", duration: "3s", details: "Generated step-by-step explanations." },
-      { title: "Notion Sync", status: "completed", duration: "2s", details: `Saved to Notion pages: ${finalState.createdPageIds ? finalState.createdPageIds.join(', ') : 'unknown'}` }
-    ];
+    // Map the executed tasks to the "steps" format expected by the frontend
+    const executedTasks = finalState.tasks || [];
+    const steps = executedTasks.map((task: LearningTask, index: number) => ({
+      title: task.description || `Task ${index + 1}`,
+      status: "completed",
+      duration: "2s", // Mock duration
+      details: `Type: ${task.type}. Priority: ${task.priority}.`
+    }));
+
+    // Add a final step for Notion Sync if pages were created
+    if (finalState.createdPageIds && finalState.createdPageIds.length > 0) {
+        steps.push({
+            title: "Notion Sync",
+            status: "completed",
+            duration: "1s",
+            details: `Saved to Notion pages: ${finalState.createdPageIds.join(', ')}`
+        });
+    }
 
     res.json({
       success: true,

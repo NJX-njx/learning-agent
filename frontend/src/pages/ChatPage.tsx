@@ -1,5 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Send, Paperclip, Image as ImageIcon, Settings, Plus, MessageSquare, User, BrainCircuit, ChevronRight, UploadCloud, FileText, Mic, Copy, Edit2, ArrowUp, AudioLines, ThumbsUp, ThumbsDown, Share, RotateCw, MoreHorizontal, Volume2, Flag, GitBranch } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import ProfileModal from '../components/ProfileModal';
 import ThinkingSidebar from '../components/ThinkingSidebar';
 
@@ -77,10 +79,15 @@ const ChatPage: React.FC = () => {
       const data = await response.json();
 
       if (data.success) {
+        // Combine generated contents into a single message or use the first one
+        const responseContent = data.data.contents && data.data.contents.length > 0 
+            ? data.data.contents.join("\n\n---\n\n") 
+            : "分析完成！我已经将结果同步到 Notion。";
+
         const assistantMessage: Message = {
           id: (Date.now() + 1).toString(),
           role: 'assistant',
-          content: "分析完成！我已经将结果同步到 Notion。以下是详细的分析报告...",
+          content: responseContent,
           thinkingSteps: data.data.steps
         };
         setMessages(prev => [...prev, assistantMessage]);
@@ -276,7 +283,9 @@ const ChatPage: React.FC = () => {
                             ? 'bg-[#f4f4f4] text-gray-900' 
                             : 'bg-transparent text-gray-900 px-0'
                         }`}>
-                          {msg.content}
+                          <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                            {msg.content}
+                          </ReactMarkdown>
                         </div>
                         
                         {/* Action Buttons */}
