@@ -374,19 +374,43 @@ export const createNodes = (
             try {
               // Cast to any to avoid strict type checking issues with DynamicStructuredTool invoke
               toolOutput = await (tool as any).invoke(toolCall.args);
-              console.log(`  Tool output (truncated): ${toolOutput.slice(0, 100)}...`);
-              
-              // Extract Page ID from output if created
-              // Expected format: "Created page with ID: xxx, URL: yyy" or "Found page ID: xxx"
-              const idMatch = toolOutput.match(/ID:\s*([a-zA-Z0-9-]+)/);
-              const urlMatch = toolOutput.match(/URL:\s*(https?:\/\/[^\s,]+)/);
+              console.log(`  Tool output (truncated): ${typeof toolOutput === 'string' ? toolOutput.slice(0, 100) : JSON.stringify(toolOutput).slice(0,100)}...`);
 
-              if (idMatch && (tool.name === 'notion_create_page' || tool.name === 'notion_search')) {
-                 // We track created pages, but maybe also found pages? 
-                 // Let's track created pages specifically for the final report.
+              // Try to parse structured JSON first (preferred). Fallback to regex for legacy text responses.
+              let parsedOutput: any = null;
+              try {
+                if (typeof toolOutput === 'string') parsedOutput = JSON.parse(toolOutput);
+                else parsedOutput = toolOutput;
+              } catch (e) {
+                parsedOutput = null;
+              }
+
+              let extractedId: string | null = null;
+              let extractedUrl: string | undefined = undefined;
+
+              if (parsedOutput) {
+                if (parsedOutput.id) {
+                  extractedId = parsedOutput.id;
+                } else if (parsedOutput.results && parsedOutput.results[0] && parsedOutput.results[0].id) {
+                  extractedId = parsedOutput.results[0].id;
+                } else if (parsedOutput.found && parsedOutput.id) {
+                  extractedId = parsedOutput.id;
+                }
+                if (parsedOutput.url) extractedUrl = parsedOutput.url;
+              }
+
+              // Fallback to regex matching on legacy human-readable outputs
+              if (!extractedId && typeof toolOutput === 'string') {
+                const idMatch = toolOutput.match(/ID:\s*([a-zA-Z0-9-]+)/);
+                const urlMatch = toolOutput.match(/URL:\s*(https?:\/\/[^\s,]+)/);
+                if (idMatch) extractedId = idMatch[1];
+                if (urlMatch) extractedUrl = urlMatch[1];
+              }
+
+              if (extractedId && (tool.name === 'notion_create_page' || tool.name === 'notion_search')) {
                  if (tool.name === 'notion_create_page') {
-                    newCreatedPageIds.push(idMatch[1]);
-                    newCreatedPages.push({ id: idMatch[1], url: urlMatch ? urlMatch[1] : undefined });
+                    newCreatedPageIds.push(extractedId);
+                    newCreatedPages.push({ id: extractedId, url: extractedUrl });
                  }
               }
 
@@ -454,7 +478,8 @@ export const createNodes = (
     return { 
       generatedContents: newGeneratedContents,
       currentTaskIndex: state.currentTaskIndex + 1,
-      createdPageIds: [...state.createdPageIds, ...newCreatedPageIds]
+      createdPageIds: [...state.createdPageIds, ...newCreatedPageIds],
+      createdPages: [...(state.createdPages || []), ...newCreatedPages]
     };
   };
 

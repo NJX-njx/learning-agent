@@ -189,6 +189,7 @@ app.post('/api/analyze', upload.single('image'), async (req: Request, res: Respo
       success: true,
       data: {
         pageIds: finalState.createdPageIds,
+        createdPages: finalState.createdPages ?? [],
         contents: finalState.generatedContents,
         steps: steps
       }

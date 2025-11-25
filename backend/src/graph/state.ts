@@ -26,4 +26,6 @@ export interface AgentState {
   generatedContents: string[];
   /** 在 Notion 中创建的页面 ID 列表 */
   createdPageIds: string[];
+  /** 在 Notion 中创建的页面列表（包含可选 URL），用于在前端展示可点击链接 */
+  createdPages?: { id: string; url?: string }[];
 }

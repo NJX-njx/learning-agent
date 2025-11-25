@@ -190,6 +190,13 @@ pip install -r requirements.txt
 - **后端开发**: 主要逻辑在 `backend/src` 下。`graph/` 目录定义了 LangGraph 工作流，`clients/` 封装了 MCP 客户端调用。
 - **前端开发**: 主要页面在 `frontend/src/pages`，组件在 `frontend/src/components`。
 
+## 📸 佐证材料
+
+以下是项目运行时的实际效果展示，作为产品功能的真实佐证：
+
+- **产品演示视频**: [productvideo.mp4](./productvideo.mp4)
+- **功能截图示例**: [image.png](./image.png)
+
 ## 🎯 结语
 
 - 由于知道活动的时间太晚了，等我们正式开始做的时候只剩下三天的时间。在这三天里，我和我的伙伴@Sophie618尽我们所能地将我们的产品理念实践出来，呈现给各位老师。她负责前端组件以及前后端的一些交互，我负责整个后端的逻辑的搭建，我们尽力想把这个产品做好

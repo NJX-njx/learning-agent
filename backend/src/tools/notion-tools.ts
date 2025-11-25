@@ -23,7 +23,7 @@ export const createNotionTools = (client: NotionClientInterface) => {
       }),
       func: async ({ query }) => {
         const result = await client.searchPage(query);
-        return result ? `Found page: "${result.title}" (ID: ${result.id})` : "No page found.";
+        return result ? JSON.stringify({ found: true, title: result.title, id: result.id }) : JSON.stringify({ found: false });
       },
     }),
     new DynamicStructuredTool({
@@ -41,7 +41,8 @@ export const createNotionTools = (client: NotionClientInterface) => {
           markdownContent: content,
           properties: {},
         });
-        return `Created page with ID: ${result.id}, URL: ${result.url}`;
+        // Return structured JSON so callers can reliably parse id and url
+        return JSON.stringify({ id: result.id, url: result.url });
       },
     }),
     new DynamicStructuredTool({
@@ -61,7 +62,7 @@ export const createNotionTools = (client: NotionClientInterface) => {
           };
         });
         await client.appendBlockChildren(pageId, children);
-        return "Content appended successfully.";
+        return JSON.stringify({ success: true });
       },
     }),
 
