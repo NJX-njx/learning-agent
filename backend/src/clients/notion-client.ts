@@ -146,9 +146,14 @@ export class NotionMcpClient implements NotionClientInterface { // 定义真实�
     const result = await this.callTool("API-post-page", args);
     
     const newPageId = this.extractResourceIdentifier(result);
+    
+    if (!newPageId) {
+      throw new Error("Failed to create page: No page ID returned from Notion API");
+    }
+
     console.log(`debugging: created page ${newPageId}, now appending content...`);
 
-    if (newPageId && !newPageId.startsWith('notion-')) {
+    if (newPageId) {
       try {
         // Append content in a separate step to ensure it gets added
         // Notion API limits children to 100 blocks per request, so we might need to batch if content is large
@@ -183,7 +188,7 @@ export class NotionMcpClient implements NotionClientInterface { // 定义真实�
     }
 
     return {
-      id: this.extractResourceIdentifier(result),
+      id: newPageId,
       url: pageUrl
     };
   }
@@ -487,7 +492,15 @@ export class NotionMcpClient implements NotionClientInterface { // 定义真实�
   /**
    * 从工具结果中提取页面或资源标识符，便于上层追踪。
    */
-  private extractResourceIdentifier(result: CallToolResult): string { // 定义提取函数。
+  private extractResourceIdentifier(result: CallToolResult): string | null { // 定义提取函数。
+    if (result.isError) {
+      const errorText = result.content
+        .filter(item => item.type === 'text')
+        .map(item => (item as any).text)
+        .join('\n');
+      throw new Error(`Notion API Error: ${errorText || 'Unknown error'}`);
+    }
+
     for (const item of result.content) { // 遍历内容数组。
       if (item.type === "resource_link" && item.uri) { // 若为资源链接。
         return item.uri; // 返回 URI。
@@ -509,7 +522,7 @@ export class NotionMcpClient implements NotionClientInterface { // 定义真实�
         }
       }
     }
-    return `notion-${Date.now()}`; // 若无可用内容，返回临时 ID。
+    return null; // 若无可用内容，返回 null。
   }
 }
 
