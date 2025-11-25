@@ -194,7 +194,7 @@ pip install -r requirements.txt
 
 以下是项目运行时的实际效果展示，作为产品功能的真实佐证：
 
-- **产品演示视频**: [productvideo.mp4](./productvideo.mp4)
+- **产品演示视频**: [productvideo.mp4]<https://download.csdn.net/download/2501_90285932/92408859>
 - **功能截图示例**: [image.png](./image.png)
 
 ## 🎯 结语
