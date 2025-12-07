@@ -14,6 +14,14 @@ export interface PaddleOcrClientInterface { // 定义 OCR 客户端接口。
    * @param imagePath 输入图片绝对路径。
    */
   runStructuredOcr(imagePath: string): Promise<OcrStructuredResult>; // 声明主方法。
+  /**
+   * 执行版面结构化（PP-StructureV3），返回原始结果。
+   */
+  runStructureV3(inputPath: string): Promise<any>;
+  /**
+   * 执行多模态 OCR-VL，返回原始结果。
+   */
+  runOcrVL(inputPath: string): Promise<any>;
 }
 
 
@@ -28,6 +36,24 @@ export class PaddleOcrMcpClient implements PaddleOcrClientInterface {
 
   constructor(private readonly serverName: string = process.env.PADDLE_OCR_MCP_SERVER || "paddleocr") {
     console.log("debugging: PaddleOcrMcpClient using server", this.serverName);
+  }
+
+  async runStructureV3(inputPath: string): Promise<any> {
+    const normalizedPath = path.resolve(inputPath);
+    console.log("debugging: PaddleOcrMcpClient.runStructureV3", normalizedPath);
+    const result = await this.callTool("pp_structure_v3", {
+      input_data: normalizedPath
+    });
+    return this.parseStructured(result);
+  }
+
+  async runOcrVL(inputPath: string): Promise<any> {
+    const normalizedPath = path.resolve(inputPath);
+    console.log("debugging: PaddleOcrMcpClient.runOcrVL", normalizedPath);
+    const result = await this.callTool("paddleocr_vl", {
+      input_data: normalizedPath
+    });
+    return this.parseStructured(result);
   }
 
   async runStructuredOcr(imagePath: string): Promise<OcrStructuredResult> {
@@ -59,6 +85,9 @@ export class PaddleOcrMcpClient implements PaddleOcrClientInterface {
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       const timeout = baseTimeout * attempt; // 逐次增长超时时间
       try {
+        // #region agent log
+        fetch('http://127.0.0.1:7242/ingest/e5093593-b997-4c63-b0ca-d3beade0aca0',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sessionId:'debug-session',runId:'pre-fix',hypothesisId:'H3',location:'paddleocr-client.ts:callTool-start',message:'callTool start',data:{tool:name,attempt},timestamp:Date.now()})}).catch(()=>{});
+        // #endregion agent log
         const result = await client.request(request, CallToolResultSchema, {
           timeout,
           // 限制最大累计等待时间为 baseTimeout * maxAttempts
@@ -74,6 +103,9 @@ export class PaddleOcrMcpClient implements PaddleOcrClientInterface {
             .join("\n");
           throw new Error(`PaddleOCR MCP 调用失败: ${message || "未知错误"}`);
         }
+        // #region agent log
+        fetch('http://127.0.0.1:7242/ingest/e5093593-b997-4c63-b0ca-d3beade0aca0',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sessionId:'debug-session',runId:'pre-fix',hypothesisId:'H3',location:'paddleocr-client.ts:callTool-success',message:'callTool success',data:{tool:name},timestamp:Date.now()})}).catch(()=>{});
+        // #endregion agent log
         return result;
       } catch (err) {
         lastError = err;
@@ -162,6 +194,27 @@ export class PaddleOcrMcpClient implements PaddleOcrClientInterface {
       .find((segment: string) => segment.startsWith("{") || segment.startsWith("["));
     if (!candidate) {
       throw new Error("PaddleOCR MCP detailed 输出不包含 JSON 片段");
+    }
+    try {
+      return JSON.parse(candidate);
+    } catch (error: any) {
+      throw new Error(`无法解析 PaddleOCR MCP 输出: ${error.message}`);
+    }
+  }
+
+  private parseStructured(result: any): any {
+    const textSegments = result.content
+      .filter((item: any) => item.type === "text")
+      .map((item: any) => item.text.trim())
+      .filter(Boolean);
+    if (textSegments.length === 0) {
+      throw new Error("PaddleOCR MCP 未返回文本内容");
+    }
+    const candidate = [...textSegments]
+      .reverse()
+      .find((segment: string) => segment.startsWith("{") || segment.startsWith("["));
+    if (!candidate) {
+      throw new Error("PaddleOCR MCP 输出不包含 JSON 片段");
     }
     try {
       return JSON.parse(candidate);

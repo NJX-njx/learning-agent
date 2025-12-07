@@ -15,6 +15,10 @@ export interface NotionClientInterface { // 定义接口。
    * @param payload 页面内容载荷。
    */
   createPage(payload: NotionWritePayload): Promise<{ id: string; url?: string }>; // 返回新页面 ID 和 URL。
+  /**
+   * 获取页面详情（MCP notion-fetch）。
+   */
+  fetchPage(pageId: string): Promise<any>;
 
   /**
    * 更新 Notion 页面属性或内容。
@@ -22,6 +26,14 @@ export interface NotionClientInterface { // 定义接口。
    * @param properties 属性键值。
    */
   updatePage(pageId: string, properties: Record<string, string | number>): Promise<void>; // 无返回值。
+  /**
+   * 批量移动页面到新父级（MCP notion-move-pages）。
+   */
+  movePages(pageIds: Array<string>, newParentId: string): Promise<any>;
+  /**
+   * 复制页面（MCP notion-duplicate-page）。
+   */
+  duplicatePage(pageId: string): Promise<any>;
 
   /**
    * 创建评论用于提醒。
@@ -40,7 +52,9 @@ export interface NotionClientInterface { // 定义接口。
   getUser(userId: string): Promise<any>;
   listUsers(pageSize?: number, startCursor?: string): Promise<any>;
   getSelf(): Promise<any>;
+  getTeams(pageSize?: number, startCursor?: string): Promise<any>;
   queryDatabase(databaseId: string, filter?: any, sorts?: any, pageSize?: number, startCursor?: string): Promise<any>;
+  queryDataSources(databaseId: string, filter?: any, sorts?: any, pageSize?: number, startCursor?: string): Promise<any>;
   search(query: string, filter?: any, sort?: any, pageSize?: number, startCursor?: string): Promise<any>;
   getBlockChildren(blockId: string, pageSize?: number, startCursor?: string): Promise<any>;
   appendBlockChildren(blockId: string, children: any[]): Promise<any>;
@@ -198,10 +212,40 @@ export class NotionMcpClient implements NotionClientInterface { // 定义真实�
    */
   async updatePage(pageId: string, properties: Record<string, string | number>): Promise<void> {
     console.log("debugging: NotionMcpClient.updatePage", pageId);
-    // 注意：API-patch-page 只能更新 properties，不能直接追加内容。
-    // 这里我们只打印日志，因为更新 properties 需要知道具体的 property ID 或名称，且结构复杂。
-    // 暂时跳过实际更新，避免报错。
-    console.log("debugging: Skipping property update for now due to schema complexity", properties);
+    await this.callTool("notion-update-page", {
+      page_id: pageId,
+      properties: properties
+    });
+  }
+
+  /**
+   * MCP: fetch page by ID（notion-fetch）。
+   */
+  async fetchPage(pageId: string): Promise<any> {
+    console.log("debugging: NotionMcpClient.fetchPage", pageId);
+    const result = await this.callTool("notion-fetch", { page_id: pageId });
+    return this.parseResult(result);
+  }
+
+  /**
+   * MCP: move pages to a new parent（notion-move-pages）。
+   */
+  async movePages(pageIds: Array<string>, newParentId: string): Promise<any> {
+    console.log("debugging: NotionMcpClient.movePages", pageIds.join(","));
+    const result = await this.callTool("notion-move-pages", {
+      page_ids: pageIds,
+      new_parent_id: newParentId
+    });
+    return this.parseResult(result);
+  }
+
+  /**
+   * MCP: duplicate page（notion-duplicate-page）。
+   */
+  async duplicatePage(pageId: string): Promise<any> {
+    console.log("debugging: NotionMcpClient.duplicatePage", pageId);
+    const result = await this.callTool("notion-duplicate-page", { page_id: pageId });
+    return this.parseResult(result);
   }
 
   /**
@@ -296,6 +340,14 @@ export class NotionMcpClient implements NotionClientInterface { // 定义真实�
     return this.parseResult(result);
   }
 
+  async getTeams(pageSize?: number, startCursor?: string): Promise<any> {
+    const args: any = {};
+    if (pageSize) args.page_size = pageSize;
+    if (startCursor) args.start_cursor = startCursor;
+    const result = await this.callTool("notion-get-teams", args);
+    return this.parseResult(result);
+  }
+
   async queryDatabase(databaseId: string, filter?: any, sorts?: any, pageSize?: number, startCursor?: string): Promise<any> {
     const args: any = { database_id: databaseId };
     if (filter) args.filter = filter;
@@ -303,6 +355,16 @@ export class NotionMcpClient implements NotionClientInterface { // 定义真实�
     if (pageSize) args.page_size = pageSize;
     if (startCursor) args.start_cursor = startCursor;
     const result = await this.callTool("API-post-database-query", args);
+    return this.parseResult(result);
+  }
+
+  async queryDataSources(databaseId: string, filter?: any, sorts?: any, pageSize?: number, startCursor?: string): Promise<any> {
+    const args: any = { database_id: databaseId };
+    if (filter) args.filter = filter;
+    if (sorts) args.sorts = sorts;
+    if (pageSize) args.page_size = pageSize;
+    if (startCursor) args.start_cursor = startCursor;
+    const result = await this.callTool("notion-query-data-sources", args);
     return this.parseResult(result);
   }
 

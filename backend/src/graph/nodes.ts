@@ -4,12 +4,63 @@ import { SystemMessage, HumanMessage, ToolMessage, BaseMessage } from "@langchai
 import { AgentState } from "./state";
 import { PaddleOcrClientInterface } from "../clients/paddleocr-client";
 import { NotionClientInterface } from "../clients/notion-client";
-import { NotionWritePayload } from "../types";
-import { createNotionTools } from "../tools/notion-tools";
+import { NotionWritePayload } from "../types"; // 引入 Notion 写入载荷类型。
+import { runCodeInSandbox } from "../utils/sandbox"; // 引入沙箱执行函数。
+import { searchPage, createPage, appendContent } from "../servers/notion"; // 引入 Notion SDK。
+import { runStructuredOcr } from "../servers/ocr"; // 引入 OCR SDK。
 
 // Default constants
 const DEFAULT_BASE_URL = "https://aistudio.baidu.com/llm/lmapi/v3";
 const DEFAULT_MODEL = "ernie-4.5-turbo-vl";
+
+/**
+ * 构造代码生成提示，要求模型返回可执行的 JS 代码字符串。
+ */
+function buildCodeExecutionPrompt(state: AgentState, task: any): string { // 构造代码提示函数。
+  const lines: Array<string> = []; // 初始化提示行数组。
+  lines.push("你需要生成一段可执行的 JavaScript 代码。"); // 提示要求生成代码。
+  lines.push("禁止输出自然语言解释，必须返回完整代码。"); // 禁止自然语言输出。
+  lines.push("可用的 import 列表（相对路径）："); // 提示可用模块。
+  lines.push(`import { searchPage, createPage, appendContent } from "../servers/notion";`); // Notion API。
+  lines.push(`import { runStructuredOcr } from "../servers/ocr";`); // OCR API。
+  lines.push("代码必须导出 async function main()，返回 JSON 对象：{ createdPages?: Array<{id:string,url?:string}>, contents?: Array<string> }"); // 返回格式要求。
+  lines.push("不要使用除了上述模块以外的 require/import。"); // 限制导入。
+  lines.push("示例："); // 提示示例。
+  lines.push(`export async function main() {
+  const anchor = await searchPage("sophie");
+  const parentId = anchor ? anchor.id : "fallback-parent";
+  const page = await createPage(parentId, "Auto Note", "## 内容\\n- 生成的内容");
+  return { createdPages: [page], contents: ["note created"] };
+}`); // 示例代码。
+  lines.push("上下文数据："); // 提示上下文。
+  lines.push(`learnerId=${state.learnerProfile.learnerId}`); // 学习者 ID。
+  lines.push(`competency=${state.learnerProfile.competencyLevel}`); // 水平。
+  lines.push(`goal=${state.learnerProfile.learningGoal}`); // 目标。
+  lines.push(`preferred=${state.learnerProfile.preferredStyle}`); // 偏好。
+  lines.push(`taskType=${task.type}`); // 任务类型。
+  lines.push(`taskDescription=${task.description}`); // 任务描述。
+  lines.push(`userQuery=${state.userQuery ?? ""}`); // 用户查询。
+  lines.push(`ocrPreview=${(state.ocrResult?.plainText || "").slice(0, 500)}`); // OCR 预览。
+  return lines.join("\n"); // 返回拼接的提示。
+}
+
+/**
+ * 将模型生成的代码提交到沙箱执行，返回解析后的结果。
+ */
+async function runGeneratedCode(code: string): Promise<{ createdPages: Array<{ id: string; url?: string }>; contents: Array<string>; logs: Array<string> }> { // 执行生成代码的函数。
+  const moduleMap = { // 构造可用模块映射。
+    "../servers/notion": { searchPage, createPage, appendContent }, // 提供 Notion API。
+    "../servers/ocr": { runStructuredOcr } // 提供 OCR API。
+  }; // 模块映射结束。
+  const sandboxResult = await runCodeInSandbox(code, { timeoutMs: 12000, moduleMap }); // 调用沙箱执行。
+  if (!sandboxResult.success) { // 若执行失败。
+    throw new Error(`Code execution failed: ${sandboxResult.errorMessage}`); // 抛出错误。
+  } // 条件结束。
+  const normalized = sandboxResult.result as any; // 获取返回结果。
+  const createdPages: Array<{ id: string; url?: string }> = Array.isArray(normalized?.createdPages) ? normalized.createdPages : []; // 解析页面数组。
+  const contents: Array<string> = Array.isArray(normalized?.contents) ? normalized.contents : []; // 解析内容数组。
+  return { createdPages, contents, logs: sandboxResult.logs }; // 返回标准化数据。
+}
 
 // Planning System Prompt
 const PLANNING_SYSTEM_PROMPT = [
@@ -64,6 +115,7 @@ const PLANNING_SYSTEM_PROMPT = [
   "2. **任务拆分原则**：当用户请求涉及多个动作或目标时，必须拆分为独立子任务，确保每个任务描述单一且完整。",
   "   - **重要**：如果用户请求非常简单（如“创建一个页面”），请生成**单个** execution 类型的任务，不要拆分为 analysis + execution，除非任务非常复杂。",
   "3. **工具调用明确性**：所有 execution 类型任务的描述中，必须包含具体的工具调用指令（如“调用notion_create_page”、“调用notion_append_content”）。",
+  "   - 如果任务目标是创建或写入笔记，请显式注明：需要调用 `createPage` 或 `appendContent`（代码执行路径将使用这些 API）。",
   "4. **描述详尽性**：避免模糊表述，每个任务描述应能让其他智能体无需额外上下文即可执行。",
   "5. **输出纯净性**：只输出 JSON 数组，不要添加 Markdown 代码块标记或其他解释性文字。"
 ].join("\n");
@@ -242,6 +294,8 @@ export const createNodes = (
       throw new Error("No task found for current index");
     }
 
+    const codeExecEnabled = process.env.CODE_EXEC_ENABLED !== "false"; // 默认启用代码执行路径。
+
     // Initialize Chat Model
     const apiKey = process.env.WENXIN_API_KEY;
     if (!apiKey) throw new Error("Missing WENXIN_API_KEY");
@@ -256,20 +310,47 @@ export const createNodes = (
       maxTokens: 2048,
     });
 
-    // Bind tools to the model
-    const allTools = createNotionTools(notionClient);
-    // Filter tools to reduce context and potential confusion, keeping only essential ones for this task
-    const tools = allTools.filter(t => 
-      ["notion_create_page", "notion_append_content", "notion_search", "notion_retrieve_page"].includes(t.name)
-    );
-    
-    console.log("debugging: Binding tools:", tools.map(t => t.name));
+    if (codeExecEnabled) { // 如果启用代码执行路径。
+      console.log("debugging: using code execution pathway"); // 记录选择路径。
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/e5093593-b997-4c63-b0ca-d3beade0aca0',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sessionId:'debug-session',runId:'pre-fix',hypothesisId:'H1',location:'graph/nodes.ts:exec-entry',message:'executionNode entry',data:{taskId:task.taskId,type:task.type},timestamp:Date.now()})}).catch(()=>{});
+      // #endregion agent log
+      try { // 捕获代码执行异常。
+        const codePrompt = buildCodeExecutionPrompt(state, task); // 构造代码生成提示。
+        const codeSystem = new SystemMessage("你是代码生成器。只输出可直接运行的 JavaScript 代码，禁止解释。"); // 设定系统角色。
+        const codeResponse = await model.invoke([codeSystem, new HumanMessage(codePrompt)]); // 请求模型生成代码。
+        const rawCode = typeof codeResponse.content === "string" ? codeResponse.content : JSON.stringify(codeResponse.content); // 提取代码文本。
+        const cleanedCode = rawCode.replace(/```(ts|typescript|js|javascript)?/gi, "").replace(/```/g, "").trim(); // 去除围栏。
+        console.log("debugging: generated code length", cleanedCode.length); // 记录代码长度。
+        // #region agent log
+        fetch('http://127.0.0.1:7242/ingest/e5093593-b997-4c63-b0ca-d3beade0aca0',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sessionId:'debug-session',runId:'pre-fix',hypothesisId:'H1',location:'graph/nodes.ts:code-generated',message:'code generated',data:{len:cleanedCode.length,taskId:task.taskId},timestamp:Date.now()})}).catch(()=>{});
+        // #endregion agent log
+        const codeResult = await runGeneratedCode(cleanedCode); // 在沙箱执行代码。
+        const mergedPages = [...state.createdPageIds, ...codeResult.createdPages.map((p) => p.id)]; // 合并页面 ID。
+        const mergedPageList = [...(state.createdPages || []), ...codeResult.createdPages]; // 合并页面列表。
+        const logNote = `Code logs:\\n${codeResult.logs.join("\\n")}`; // 生成日志摘要。
+        const mergedContents = [...state.generatedContents, ...(codeResult.contents.length > 0 ? codeResult.contents : ["code execution finished", logNote])]; // 合并内容与日志。
+        // #region agent log
+        fetch('http://127.0.0.1:7242/ingest/e5093593-b997-4c63-b0ca-d3beade0aca0',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sessionId:'debug-session',runId:'pre-fix',hypothesisId:'H2',location:'graph/nodes.ts:code-success',message:'code execution success',data:{createdPages:codeResult.createdPages.length,contents:codeResult.contents.length},timestamp:Date.now()})}).catch(()=>{});
+        // #endregion agent log
+        return { // 返回更新后的状态。
+          generatedContents: mergedContents, // 更新生成内容。
+          currentTaskIndex: state.currentTaskIndex + 1, // 推进任务索引。
+          createdPageIds: mergedPages, // 更新页面 ID 列表。
+          createdPages: mergedPageList // 更新页面列表。
+        }; // 返回结束。
+      } catch (error: any) { // 如果代码路径失败。
+        console.error("debugging: code execution pathway failed", error); // 记录错误。
+        // #region agent log
+        fetch('http://127.0.0.1:7242/ingest/e5093593-b997-4c63-b0ca-d3beade0aca0',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sessionId:'debug-session',runId:'pre-fix',hypothesisId:'H2',location:'graph/nodes.ts:code-error',message:'code execution error',data:{error:String((error as Error).message)},timestamp:Date.now()})}).catch(()=>{});
+        // #endregion agent log
+        throw error; // 不再回退到工具调用，直接抛出。
+      } // try-catch 结束。
+    } else { // 若未启用代码执行。
+      throw new Error("CODE_EXEC_ENABLED 被关闭，且已移除 tool-call 回退，请开启代码执行模式。");
+    }
 
-    // Force tool usage if possible, or at least bind them
-    // Note: ChatOpenAI with some providers might need explicit tool_choice
-    const modelWithTools = model.bindTools(tools);
-
-    // Build Prompt Context
+    /* // Build Prompt Context
     const spanPreview = JSON.stringify(state.ocrResult!.spans.slice(0, 10));
     const tablePreview = JSON.stringify(state.ocrResult!.tableData.slice(0, 5));
     
@@ -481,6 +562,7 @@ export const createNodes = (
       createdPageIds: [...state.createdPageIds, ...newCreatedPageIds],
       createdPages: [...(state.createdPages || []), ...newCreatedPages]
     };
+    */
   };
 
   return { ocrNode, planningNode, executionNode };
