@@ -231,12 +231,19 @@ const ChatPage: React.FC = () => {
 
       formData.append('message', input);
 
-      const response = await fetch('http://localhost:3001/api/analyze', {
+      const apiBase = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:3001';
+      const token = localStorage.getItem('authToken');
+      const response = await fetch(`${apiBase}/api/analyze`, {
         method: 'POST',
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
         body: formData,
       });
 
       const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || '请求失败');
+      }
 
       if (data.success) {
         // Combine generated contents into a single message or use the first one
@@ -261,8 +268,15 @@ const ChatPage: React.FC = () => {
             return newMessages;
         });
       }
-    } catch (error) {
+      setIsLoading(false);
+    } catch (error: any) {
       console.error("Error:", error);
+      if (error?.message?.includes('Unauthorized')) {
+        alert('登录已失效，请重新登录。');
+        localStorage.removeItem('authToken');
+        setIsLoading(false);
+        return;
+      }
       setTimeout(() => {
           const mockSteps = [
               { title: "识别题目内容", status: "completed", duration: "2s", details: "OCR 识别完成，检测到一次函数相关题目。" },
