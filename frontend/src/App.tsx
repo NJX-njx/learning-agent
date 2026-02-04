@@ -30,9 +30,10 @@ const LandingPage = () => {
     navigate('/chat');
   };
 
-  const handleLogin = (userData: any) => {
+  const handleLogin = (userData: any, token: string) => {
     setUser(userData);
     localStorage.setItem('user', JSON.stringify(userData));
+    localStorage.setItem('authToken', token);
     setShowAuthModal(false);
     // After login, show profile wizard if it's a new user or just navigate
     // For now, let's show the wizard to ensure we capture preferences
@@ -42,6 +43,7 @@ const LandingPage = () => {
   const handleLogout = () => {
     setUser(null);
     localStorage.removeItem('user');
+    localStorage.removeItem('authToken');
     navigate('/');
   };
 
@@ -78,7 +80,8 @@ const LandingPage = () => {
 
 const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
   const user = localStorage.getItem('user');
-  if (!user) {
+  const token = localStorage.getItem('authToken');
+  if (!user || !token) {
     return <Navigate to="/" replace />;
   }
   return <>{children}</>;

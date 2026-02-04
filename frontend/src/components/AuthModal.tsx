@@ -1,10 +1,10 @@
 import React, { useState } from 'react';
-import { X, Eye, EyeOff, Mail, Lock } from 'lucide-react';
+import { X, Eye, EyeOff } from 'lucide-react';
 
 interface AuthModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onLogin: (user: any) => void;
+  onLogin: (user: any, token: string) => void;
 }
 
 const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onLogin }) => {
@@ -23,7 +23,8 @@ const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onLogin }) => {
     setLoading(true);
 
     try {
-      const endpoint = isLogin ? 'http://localhost:3001/api/login' : 'http://localhost:3001/api/register';
+      const apiBase = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:3001';
+      const endpoint = isLogin ? `${apiBase}/api/login` : `${apiBase}/api/register`;
       const response = await fetch(endpoint, {
         method: 'POST',
         headers: {
@@ -38,8 +39,8 @@ const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onLogin }) => {
         throw new Error(data.error || 'Authentication failed');
       }
 
-      if (data.success && data.user) {
-        onLogin(data.user);
+      if (data.success && data.user && data.token) {
+        onLogin(data.user, data.token);
       }
     } catch (err: any) {
       setError(err.message);

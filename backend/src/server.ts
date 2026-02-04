@@ -8,10 +8,11 @@ import { NotionMcpClient } from "./clients/notion-client";
 import { createWorkflow } from "./graph";
 import { LearnerProfile, LearningTask } from "./types";
 import { FeedbackLoopManager } from "./utils/feedback-loop";
-import { createUser, findUserByEmail } from "./db";
+import { createUser, findUserByEmail, verifyPassword } from "./db";
+import { createSessionToken, getUserIdFromToken } from "./utils/auth";
 
 const app = express();
-const port = 3001;
+const port = Number(process.env.PORT) || 3001;
 
 app.use(cors());
 app.use(express.json());
@@ -21,7 +22,7 @@ const storage = multer.diskStorage({
   destination: function (req: any, file: any, cb: any) {
     const uploadDir = 'uploads';
     if (!fs.existsSync(uploadDir)) {
-      fs.mkdirSync(uploadDir);
+      fs.mkdirSync(uploadDir, { recursive: true });
     }
     cb(null, uploadDir);
   },
@@ -30,7 +31,16 @@ const storage = multer.diskStorage({
   }
 });
 
-const upload = multer({ storage: storage });
+const upload = multer({
+  storage,
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    if (!file.mimetype.startsWith('image/')) {
+      return cb(new Error('Only image uploads are allowed'));
+    }
+    cb(null, true);
+  },
+});
 
 // Initialize clients (lazy loading or singleton pattern recommended for production)
 const ocrClient = new PaddleOcrMcpClient();
@@ -44,6 +54,12 @@ app.post('/api/register', (req: Request, res: Response) => {
     if (!email || !password) {
       return res.status(400).json({ error: 'Email and password are required' });
     }
+    if (!/^\S+@\S+\.\S+$/.test(email)) {
+      return res.status(400).json({ error: 'Email format is invalid' });
+    }
+    if (typeof password !== 'string' || password.length < 8) {
+      return res.status(400).json({ error: 'Password must be at least 8 characters' });
+    }
 
     const existingUser = findUserByEmail(email);
     if (existingUser) {
@@ -51,8 +67,10 @@ app.post('/api/register', (req: Request, res: Response) => {
     }
 
     const newUser = createUser(email, password);
+    const token = createSessionToken(newUser.id);
     res.json({
       success: true,
+      token,
       user: {
         id: newUser.id,
         email: newUser.email,
@@ -70,14 +88,19 @@ app.post('/api/login', (req: Request, res: Response) => {
     if (!email || !password) {
       return res.status(400).json({ error: 'Email and password are required' });
     }
+    if (!/^\S+@\S+\.\S+$/.test(email)) {
+      return res.status(400).json({ error: 'Email format is invalid' });
+    }
 
     const user = findUserByEmail(email);
-    if (!user || user.password !== password) {
+    if (!user || !verifyPassword(password, user)) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
+    const token = createSessionToken(user.id);
     res.json({
       success: true,
+      token,
       user: {
         id: user.id,
         email: user.email,
@@ -107,11 +130,23 @@ async function findParentPage(notionClient: NotionMcpClient): Promise<string> {
 
 app.post('/api/analyze', upload.single('image'), async (req: Request, res: Response) => {
   try {
+    const authHeader = req.headers.authorization;
+    const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : '';
+    if (!token || !getUserIdFromToken(token)) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
     if (!req.file && !req.body.message) {
       return res.status(400).json({ error: 'No image file or message provided' });
     }
 
-    const profileData = JSON.parse(req.body.profile || '{}');
+    let profileData: Record<string, string> = {};
+    if (req.body.profile) {
+      try {
+        profileData = JSON.parse(req.body.profile);
+      } catch (error: any) {
+        return res.status(400).json({ error: 'Invalid profile data JSON' });
+      }
+    }
     const imagePath = req.file ? path.resolve(req.file.path) : "";
     const userQuery = req.body.message || "";
     const learnerId = req.body.learnerId;
@@ -160,12 +195,7 @@ app.post('/api/analyze', upload.single('image'), async (req: Request, res: Respo
     // but we'll structure the response to simulate "steps" for the frontend CoT.
     const finalState: any = await appWorkflow.invoke(initialState);
 
-    // 5. Cleanup
-    if (req.file) {
-        // fs.unlinkSync(imagePath); // Optional: delete file after processing
-    }
-
-    // 6. Construct Response
+    // 5. Construct Response
     // Map the executed tasks to the "steps" format expected by the frontend
     const executedTasks = finalState.tasks || [];
     const steps = executedTasks.map((task: LearningTask, index: number) => ({
@@ -185,7 +215,7 @@ app.post('/api/analyze', upload.single('image'), async (req: Request, res: Respo
         });
     }
 
-    res.json({
+    return res.json({
       success: true,
       data: {
         pageIds: finalState.createdPageIds,
@@ -194,13 +224,23 @@ app.post('/api/analyze', upload.single('image'), async (req: Request, res: Respo
         steps: steps
       }
     });
-
   } catch (error: any) {
     console.error("Analysis failed:", error);
-    res.status(500).json({ error: error.message });
+    return res.status(500).json({ error: error.message });
+  } finally {
+    if (req.file) {
+      fs.promises.unlink(req.file.path).catch(() => undefined);
+    }
   }
 });
 
 app.listen(port, () => {
   console.log(`Server running at http://localhost:${port}`);
+});
+
+app.use((err: any, req: Request, res: Response, next: () => void) => {
+  if (err instanceof multer.MulterError || err?.message?.includes('image')) {
+    return res.status(400).json({ error: err.message });
+  }
+  return res.status(500).json({ error: 'Unexpected server error' });
 });
